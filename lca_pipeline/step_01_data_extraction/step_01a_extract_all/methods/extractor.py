@@ -1,0 +1,189 @@
+import csv
+import os
+import json
+from . import helpers_units as unit
+from . import helpers_io as inout
+from . import helpers_metadata as meta
+from . import helpers_material as mat
+from . import helpers_geometry as geo
+from . import helpers_psets as prop
+from . import helpers_relationships as rela
+from . import helpers_location as loc
+from . import helpers_boq as boq
+from . import helpers_file_metadata as file_meta
+
+
+def extractor(input_file, model, out_directory_elements, out_directory_compositions, out_directory_boq, max_objects, config):
+
+    # Initialize counters for single and composition elements & bill of quantities rows
+    count_single_elements = 0
+    count_composition_elements = 0
+    count_skipped_elements = 0
+    boq_rows = []
+
+    # Check IFC schema version to specify the correct entity type
+    schema_version = model.schema_name
+    entity_type = "IfcBuiltElement" if schema_version.startswith("IFC4.3") else "IfcBuildingElement"
+
+    # Load all IfcBuildingElements from IFC model
+    elements = model.get_entities_by_type(entity_type)
+
+    # Extract global model values before looping element
+    formatted_units, lc_factor = unit.model_units(model)
+    sorted_storey_map = loc.sorted_storey_map(model, lc_factor)
+    hierarchy_tree, parent_lookup = loc.extract_spatial_hierarchy(model, lc_factor)
+    classification_relationships = model.get_entities_by_type("IfcRelAssociatesClassification")
+    property_relationships = model.get_entities_by_type("IfcRelDefinesByProperties")
+    type_relationships = model.get_entities_by_type("IfcRelDefinesByType")
+    material_relationships = model.get_entities_by_type("IfcRelAssociatesMaterial")
+    spatial_relationships = model.get_entities_by_type("IfcRelContainedInSpatialStructure")
+    aggregates_relationships = model.get_entities_by_type("IfcRelAggregates")
+    nesting_relationships = model.get_entities_by_type("IfcRelNests")
+    covering_relationships = model.get_entities_by_type("IfcRelCoversBldgElements")
+    void_relationships = model.get_entities_by_type("IfcRelVoidsElement")
+    group_relationships = model.get_entities_by_type("IfcRelAssignsToGroup")
+
+    # Get File Metadata for overview sheet
+    file_metadata = file_meta.get_file_metadata(input_file, model, formatted_units)
+
+
+    # Iterate over all IfcBuildingElements
+    for element in elements:
+        if max_objects is not None and (count_single_elements + count_composition_elements) >= max_objects:
+            break
+
+        # Get entity and skip based on config/1_extraction_config.yaml
+        element_type = meta.entity(element)
+        include_all = config.get("Include All IfcBuildingElement Entities", True)
+        if not include_all:
+            if not config.get(element_type, False):
+                count_skipped_elements += 1
+                continue # Skip this element
+
+        try:
+            # === CREATE DATA SHEETS FOR EACH ELEMENT ===
+
+            # Initialize the data dictionary for each element
+            element_data = {}
+            obb = None # safety line
+
+            # --- ELEMENT METADATA ---
+            metadata = {}
+            metadata["Name"] = meta.name(element)
+            metadata["UID"] = meta.uid(element)
+            metadata["GlobalId"] = meta.globalid(element)
+            metadata["Type"] = meta.entity(element)
+            metadata["ObjectType"] = meta.objecttype(element)
+            metadata["Classification"] = meta.extract_classification_info(element, classification_relationships)
+            decomposes, is_decomposed_by = meta.extract_hierarchy(element, aggregates_relationships)
+            metadata["Decomposes"] = decomposes
+            metadata["Is Decomposed By"] = is_decomposed_by
+            element_data["Element Metadata"] = metadata
+
+            # --- MATERIAL DATA ---
+            material_data = mat.extract_material_associations(element, material_relationships, type_relationships, lc_factor)
+            element_data["Element Material Data"] = material_data
+
+            # --- GEOMETRY DATA ---
+            geometry_data = {}
+            mesh, obb = geo.get_mesh(element)
+            geometry_data["Quantities (IFC)"] = geo.quantities_ifc(element, property_relationships, lc_factor)
+            geometry_data["Quantities (COMPAS)"] = geo.quantities_compas(element)
+            obb_dimensions = geo.bounding_box_dimensions(obb, lc_factor)
+            geometry_data["Bounding Box Dimensions (OBB - local frame)"] = obb_dimensions
+            obb_volume = geo.bounding_box_volume(obb_dimensions)
+            geometry_data["Bounding Box Volume"] = obb_volume
+            geometry_data["Real Volume to Bounding Box Volume Ratio"] = geo.real_volume_to_bounding_box_ratio(element, obb_volume)
+            geometry_data["Geometric Representation"] = geo.representation(element)
+            geometry_data["Face Count (tessellated element)"] = geo.face_count(mesh)
+            geometry_data["Vertex Count (tessellated element)"] = geo.vertex_count(mesh)
+            geometry_data["Edge Count (tessellated element)"] = geo.edge_count(mesh)
+            geometry_data["Primary Object Axis (Cardinal Direction)"] = geo.get_cardinal_direction_from_vector(obb)
+            element_data["Element Geometry Data"] = geometry_data
+
+            # --- PROPERTY SETS ---
+            psets_data = {}
+            psets_data["Psets Element"] = prop.extract_element_psets(element, property_relationships)
+            psets_data["Psets Object Type"] = prop.extract_type_psets(element, type_relationships)
+            element_data["Element Property Sets"] = psets_data
+                
+            # --- RELATIONSHIPS ---
+            relationships_data = {}
+            relationships_data["Nests"] = rela.nests(element, nesting_relationships)
+            relationships_data["Is Nested By"] = rela.is_nested_by(element, nesting_relationships)
+            relationships_data["Covers"] = rela.covers(element, covering_relationships)
+            relationships_data["Is Covered By"] = rela.is_covered_by(element, covering_relationships)
+            relationships_data["Has Openings"] = rela.openings(element, void_relationships)
+            relationships_data["Assigned Groups"] = rela.group_assignments(element, group_relationships)
+            element_data["Element Relationships"] = relationships_data
+
+            # --- LOCATION ---
+            location_data = {}
+            location_data["Storeys Map"] = sorted_storey_map
+            location_data["Element Located in Storey"] = loc.element_storey_name(element)
+            location_data["Spatial Relationship"] = loc.extract_full_spatial_hierarchy(element, spatial_relationships, parent_lookup, hierarchy_tree)
+            element_data["Element Location"] = location_data
+
+            # --- EXPORT ---
+            element_name = meta.name(element)
+
+            # Choose directory based on is_decompsed_by
+            if is_decomposed_by:
+                inout.save_individual_json(element_data, out_directory_compositions, element_name)
+                count_composition_elements += 1
+            else:     
+                inout.save_individual_json(element_data, out_directory_elements, element_name)
+                count_single_elements += 1
+
+                # === APPEND EACH ELEMENT TO A BILL OF QUANTITIES ===      
+
+                # Extract relevant value/data (if available) for the Bill of Quantities
+                ifc_quants_element = element_data.get("Element Geometry Data", {}).get("Quantities (IFC)", {})
+                psets_element = element_data.get("Element Property Sets", {}).get("Psets Element", {})
+                obb_dimensions = element_data.get("Element Geometry Data", {}).get("Bounding Box Dimensions (OBB - local frame)", {})
+                entity = meta.entity(element)
+
+                # Calculate prioritized quantities
+                volume, area, length, volume_source, area_source, length_source = boq.extract_quantities(element, entity, ifc_quants_element, psets_element, obb_dimensions)
+
+                boq_row = {
+                    "GlobalId": element_data.get("Element Metadata", {}).get("GlobalId", "Unknown"),
+                    "Name": element_data.get("Element Metadata", {}).get("Name", "Unknown"),
+                    "Length [m]": length or 0,
+                    "Length Source": length_source,
+                    "Largest Surface Area [m^2]": area or 0,
+                    "Area Source": area_source,
+                    "Volume [m^3]": volume or 0,
+                    "Volume Source": volume_source
+                }
+
+                boq_rows.append(boq_row)
+        except Exception as e:
+            name = meta.name(element) or "Unnamed"
+            globalid = meta.globalid(element) or "No GlobalId"
+            print(f"Error processing element: Name='{name}', GlobalId='{globalid}'")
+            print(f"Exception: {e}")
+            continue
+
+    # Export the Bill of Quantities to a CSV file
+    boq_output_path = os.path.join(out_directory_boq, "BoQ_step_01a.csv")
+    boq_fieldnames = ["GlobalId", "Name", "Length [m]", "Length Source", "Largest Surface Area [m^2]", "Area Source", "Volume [m^3]", "Volume Source"]
+
+    with open(boq_output_path, "w", newline='', encoding="utf-8") as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=boq_fieldnames)
+        writer.writeheader()
+        writer.writerows(boq_rows)
+    
+    # Add composition and skipped element counters to metadata
+    file_metadata["Module 01: Data Extraction"] = {
+        "Module 01a: Extract All Elements": {
+            "Building Elements with Childern (Disregarded for inference)": count_composition_elements,
+            "Building Elements without Childern": count_single_elements,
+            "Skipped Elements due to Configuration": count_skipped_elements
+        }
+    }
+
+    # Export the Metadata JSON file
+    file_metadata_output_path = os.path.join(out_directory_boq, "metadata_step_01a.json")
+    with open(file_metadata_output_path, "w", encoding="utf-8") as jsonfile:
+        json.dump(file_metadata, jsonfile, indent=4)
