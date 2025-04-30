@@ -1,5 +1,5 @@
 # Extract volume, area, and length from best available source (1. IFC / 2. Pset/ 3. Bounding Box).
-def extract_quantities(element, entity, ifc_quants_element, psets_element, obb_dimensions):
+def extract_quantities(element, entity, ifc_quants_element, psets_element, obb_dimensions, brep_toggle):
     volume = None
     area = None
     length = None
@@ -18,7 +18,7 @@ def extract_quantities(element, entity, ifc_quants_element, psets_element, obb_d
             except (ValueError, TypeError):
                 volume = None
 
-    if volume is None:
+    if volume is None and brep_toggle:
         brep = element.geometry
         if brep is not None:
             try:

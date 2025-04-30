@@ -233,3 +233,24 @@ def get_cardinal_direction_from_vector(obb):
             return direction
 
     return "E"  # Default fallback
+
+
+def compute_brep_geometry(element, lc_factor, property_relationships):
+    try:
+        geometry_data = {}
+        mesh, obb = get_mesh(element)
+        geometry_data["Quantities (COMPAS)"] = quantities_compas(element)
+        obb_dimensions = bounding_box_dimensions(obb, lc_factor)
+        geometry_data["Bounding Box Dimensions (OBB - local frame)"] = obb_dimensions
+        obb_volume = bounding_box_volume(obb_dimensions)
+        geometry_data["Bounding Box Volume"] = obb_volume
+        geometry_data["Real Volume to Bounding Box Volume Ratio"] = real_volume_to_bounding_box_ratio(element, obb_volume)
+        geometry_data["Geometric Representation"] = representation(element)
+        geometry_data["Face Count (tessellated element)"] = face_count(mesh)
+        geometry_data["Vertex Count (tessellated element)"] = vertex_count(mesh)
+        geometry_data["Edge Count (tessellated element)"] = edge_count(mesh)
+        geometry_data["Primary Object Axis (Cardinal Direction)"] = get_cardinal_direction_from_vector(obb)
+        return geometry_data, obb_dimensions
+    except Exception as e:
+        print(f"[BREP ERROR] Failed to extract geometry: {e}")
+        return {}, None

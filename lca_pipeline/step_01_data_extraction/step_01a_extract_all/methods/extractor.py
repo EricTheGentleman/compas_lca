@@ -1,6 +1,8 @@
 import csv
 import os
 import json
+import concurrent.futures
+import time
 from . import helpers_units as unit
 from . import helpers_io as inout
 from . import helpers_metadata as meta
@@ -20,6 +22,7 @@ def extractor(input_file, model, out_directory_elements, out_directory_compositi
     count_composition_elements = 0
     count_skipped_elements = 0
     boq_rows = []
+    brep_toggle = False
 
     # Check IFC schema version to specify the correct entity type
     schema_version = model.schema_name
@@ -66,6 +69,8 @@ def extractor(input_file, model, out_directory_elements, out_directory_compositi
             # Initialize the data dictionary for each element
             element_data = {}
             obb = None # safety line
+            obb_dimensions = None
+            obb_volume = None
 
             # --- ELEMENT METADATA ---
             metadata = {}
@@ -86,19 +91,17 @@ def extractor(input_file, model, out_directory_elements, out_directory_compositi
 
             # --- GEOMETRY DATA ---
             geometry_data = {}
-            mesh, obb = geo.get_mesh(element)
             geometry_data["Quantities (IFC)"] = geo.quantities_ifc(element, property_relationships, lc_factor)
-            geometry_data["Quantities (COMPAS)"] = geo.quantities_compas(element)
-            obb_dimensions = geo.bounding_box_dimensions(obb, lc_factor)
-            geometry_data["Bounding Box Dimensions (OBB - local frame)"] = obb_dimensions
-            obb_volume = geo.bounding_box_volume(obb_dimensions)
-            geometry_data["Bounding Box Volume"] = obb_volume
-            geometry_data["Real Volume to Bounding Box Volume Ratio"] = geo.real_volume_to_bounding_box_ratio(element, obb_volume)
-            geometry_data["Geometric Representation"] = geo.representation(element)
-            geometry_data["Face Count (tessellated element)"] = geo.face_count(mesh)
-            geometry_data["Vertex Count (tessellated element)"] = geo.vertex_count(mesh)
-            geometry_data["Edge Count (tessellated element)"] = geo.edge_count(mesh)
-            geometry_data["Primary Object Axis (Cardinal Direction)"] = geo.get_cardinal_direction_from_vector(obb)
+            obb_dimensions = None
+            if brep_toggle:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(geo.compute_brep_geometry, element, lc_factor, property_relationships)
+                    try:
+                        brep_result, obb_dimensions = future.result(timeout=30)
+                        geometry_data.update(brep_result)
+                    except concurrent.futures.TimeoutError:
+                        print(f"[TIMEOUT] Skipping BREP geometry for element {meta.globalid(element)}")
+                        brep_toggle = False  # Optional: disable for rest of the file
             element_data["Element Geometry Data"] = geometry_data
 
             # --- PROPERTY SETS ---
@@ -140,11 +143,10 @@ def extractor(input_file, model, out_directory_elements, out_directory_compositi
                 # Extract relevant value/data (if available) for the Bill of Quantities
                 ifc_quants_element = element_data.get("Element Geometry Data", {}).get("Quantities (IFC)", {})
                 psets_element = element_data.get("Element Property Sets", {}).get("Psets Element", {})
-                obb_dimensions = element_data.get("Element Geometry Data", {}).get("Bounding Box Dimensions (OBB - local frame)", {})
                 entity = meta.entity(element)
 
                 # Calculate prioritized quantities
-                volume, area, length, volume_source, area_source, length_source = boq.extract_quantities(element, entity, ifc_quants_element, psets_element, obb_dimensions)
+                volume, area, length, volume_source, area_source, length_source = boq.extract_quantities(element, entity, ifc_quants_element, psets_element, obb_dimensions, brep_toggle)
 
                 boq_row = {
                     "GlobalId": element_data.get("Element Metadata", {}).get("GlobalId", "Unknown"),
