@@ -1,39 +1,6 @@
-# === High-level settings ===
-_settings:
-  remove_empty_values: true
-  preserve_root_keys: # Some root keys should be preserved, as some prompt variables explicitly mention these (avoid confusion)
-    - Target Layer of Material Inference
-    - Building Element Context
-    - Element Metadata
-    - Other Material Layers
-    - Element Geometry Data
-    - Element Property Sets
-  empty_value_definitions:
-    - []
-    - {}
-    - "Not defined"
-    - "Unknown"
-    - null
-
-# Specify the order of the high level keys (as listed below)
-# The names should not be altered, only the order
-# This might have an impact on the LLM performance
-_top_level_order:
-  - Target Layer of Material Inference
-  - Building Element Context
-  - CompilationGroupID
-
-_building_element_context_order:
-  - Element Metadata
-  - Other Material Layers
-  - Element Geometry Data
-  - Element Property Sets
-  - Element Relationships
-  - Element Location
-
-
 # Mirrored target layer datasheet structure
 # Build a custom configuration with this
+
 # === Target Layer of Material Inference ===
 Target Layer of Material Inference:
   Material Name: true
@@ -41,9 +8,9 @@ Target Layer of Material Inference:
   Thickness Unit: true
   Layer Number: true
 
+# === Building Element Context ===
 Building Element Context:
   _include: true
-
   Element Metadata:
     _include: true
     Name: true
@@ -74,6 +41,9 @@ Building Element Context:
     Thickness: true
     Thickness Unit: true
     Layer Number: true
+
+  Layer Set Metadata:
+    _include: true
 
   Element Geometry Data:
     _include: true

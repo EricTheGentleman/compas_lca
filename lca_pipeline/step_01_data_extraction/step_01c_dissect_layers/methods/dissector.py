@@ -24,21 +24,26 @@ def dissector_element(source_dirs, elements_directory, target_layer_directory, m
                 except json.JSONDecodeError:
                     continue
 
-            # Find material layers
+            # Find material layers and store full metadata
             material_data = data.get("Element Material Data", [])
             layers = []
+            material_metadata = None  # <- NEW
             for mat in material_data:
                 if not isinstance(mat, dict):
-                    continue # ignore malformed data
-                if isinstance(mat, dict) and mat.get("IfcEntity") == "IfcMaterialLayerSetUsage" and "Layers" in mat:
+                    continue
+                if mat.get("IfcEntity") in ("IfcMaterialLayerSetUsage", "IfcMaterialLayerSet") and "Layers" in mat:
                     layers = mat["Layers"]
-                    break  # Found the layer structure, no need to continue
-                elif isinstance(mat, dict) and mat.get("IfcEntity") == "IfcMaterialLayerSet" and "Layers" in mat:
-                    layers = mat["Layers"]
+                    material_metadata = mat  # <- store full object
                     break
 
             # No layers or single-layer elements → copy as-is to elements_directory
+
             if not layers or len(layers) == 1:
+                # Remove the key from the original file data
+                for mat in material_data:
+                    if isinstance(mat, dict) and "Layer Direction and Growth description" in mat:
+                        mat.pop("Layer Direction and Growth description", None)
+
                 target_path = os.path.join(elements_directory, filename)
                 with open(target_path, "w", encoding="utf-8") as out_file:
                     json.dump(data, out_file, indent=4, ensure_ascii=False)
@@ -47,10 +52,7 @@ def dissector_element(source_dirs, elements_directory, target_layer_directory, m
 
             # If an element has more than 2 layers, it is dissected into multiple "Target Layer" files
             elif len(layers) > 1:
-
-                # Dissect filename for new filename later
                 base_filename = filename[:-5]  # strip ".json"
-
                 multi_counter += 1
 
                 for idx, target_layer in enumerate(layers):
@@ -66,13 +68,20 @@ def dissector_element(source_dirs, elements_directory, target_layer_directory, m
                             "Layer Number": i + 1
                         })
 
+                    # Append material metadata at the end of other layers list
+
+
+
                     # Build Building Element Context conditionally
                     building_element_context = {}
 
                     if "Element Metadata" in data:
                         building_element_context["Element Metadata"] = copy.deepcopy(data["Element Metadata"])
-                    # Replace Element Material Data by Other Material Layers
                     building_element_context["Other Material Layers"] = other_layers
+                    if material_metadata:
+                        material_metadata_cleaned = copy.deepcopy(material_metadata)
+                        material_metadata_cleaned.pop("Layers", None)
+                        building_element_context["Layer Set Metadata"] = material_metadata_cleaned
                     if "Element Geometry Data" in data:
                         building_element_context["Element Geometry Data"] = copy.deepcopy(data["Element Geometry Data"])
                     if "Element Property Sets" in data:
@@ -91,7 +100,6 @@ def dissector_element(source_dirs, elements_directory, target_layer_directory, m
                         "Building Element Context": building_element_context
                     }
 
-                    # Add CompilationGroupID at top level if it exists
                     if "CompilationGroupID" in data:
                         output_data["CompilationGroupID"] = data["CompilationGroupID"]
 
@@ -102,7 +110,7 @@ def dissector_element(source_dirs, elements_directory, target_layer_directory, m
                     with open(output_path, "w", encoding="utf-8") as out_file:
                         json.dump(output_data, out_file, indent=4, ensure_ascii=False)
 
-                    target_layer_counter +=1
+                    target_layer_counter += 1
 
     # Update metadata JSON
     with open(metadata_path, "r", encoding="utf-8") as meta_file:
@@ -116,12 +124,10 @@ def dissector_element(source_dirs, elements_directory, target_layer_directory, m
 
     metadata["Module 01: Data Extraction"]["Required Inferences"] = target_layer_counter + single_counter
 
-    # Construct a new file path
     new_metadata_path = os.path.join(output_folder, "metadata_step_01c.json")
-
-    # Save the updated metadata to the new file
     with open(new_metadata_path, "w", encoding="utf-8") as f:
         json.dump(metadata, f, indent=4)
+
 
 
 # Method to load material names for non-dissected elements (i.e., no or 1 layer only)

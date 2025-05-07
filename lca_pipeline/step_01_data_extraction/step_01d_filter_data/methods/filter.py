@@ -99,15 +99,19 @@ def apply_element_filter(data, config):
     return result
 
 
-def filter_element_json(data, yaml_config):
-    # Pull settings from YAML
-    settings = yaml_config.get("_settings", {})
-    remove_empty = settings.get("remove_empty_values", False)
-    preserve_keys = settings.get("preserve_root_keys", [])
-    empty_values = settings.get("empty_value_definitions", ["Not defined", "Unknown", [], {}])
+def filter_element_json(data, config, remove_empty=False):
 
-    # Apply the actual filtering
-    filtered = apply_element_filter(data, {k: v for k, v in yaml_config.items() if not k.startswith("_")})
+    # hard-code keys to preserve (since some prompt variable specify these) & empty values 
+    preserve_keys = [
+        "Element Metadata",
+        "Element Material Data",
+        "Element Geometry Data",
+        "Element Property Sets"
+    ]
+    empty_values = ["Not defined", "Unknown", [], {}, None]
+
+    # Apply filtering
+    filtered = apply_element_filter(data, {k: v for k, v in config.items() if not k.startswith("_")})
 
     # Clean result if requested
     if remove_empty:
@@ -116,17 +120,21 @@ def filter_element_json(data, yaml_config):
     return filtered
 
 
-def filter_target_layer_json(data, config):
-    from copy import deepcopy
+def filter_target_layer_json(data, config, remove_empty=False):
 
-    config = deepcopy(config)
-    settings = config.pop("_settings", {})
-    remove_empty = settings.get("remove_empty_values", False)
-    preserve_keys = settings.get("preserve_root_keys", [])
-    empty_values = settings.get("empty_value_definitions", [])
+    # hard-code keys to preserve (since some prompt variable specify these) & empty values 
+    preserve_keys = [
+        "Element Metadata",
+        "Element Material Data",
+        "Element Geometry Data",
+        "Element Property Sets"
+    ]
+    empty_values = ["Not defined", "Unknown", [], {}, None]
 
-    filtered = apply_element_filter(data, config)  # reuse same core logic
+    # Apply filtering
+    filtered = apply_element_filter(data, {k: v for k, v in config.items() if not k.startswith("_")})
 
+    # Clean result if requested
     if remove_empty:
         filtered = clean_dict(filtered, preserve_keys_at_root=preserve_keys, empty_values=empty_values)
 

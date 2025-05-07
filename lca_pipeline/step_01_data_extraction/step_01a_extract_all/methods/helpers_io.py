@@ -82,7 +82,7 @@ def get_single_ifc_file():
 
 
 # Loads the 'Extraction Configuration' section from a YAML file.
-def load_extraction_config(yaml_path):
+def load_yaml_config(yaml_path):
     with open(yaml_path, "r") as f:
         config_data = yaml.safe_load(f)
     return config_data

@@ -39,8 +39,8 @@ def aggregator_element(source_folder, elements_unique_folder, data_folder):
 
                 type_value = element_metadata.get("Type")
                 object_type = element_metadata.get("ObjectType")
-                material_relationship_type = None
-                material_identifier = None
+                material_relationship_type = "Not defined"
+                material_identifier = "Not defined"
                 material_layers = []
 
                 if isinstance(material_data, list):
@@ -77,7 +77,7 @@ def aggregator_element(source_folder, elements_unique_folder, data_folder):
                                     for layer in material.get("Layers", []) if isinstance(layer, dict)
                                 ]
 
-                if type_value and object_type and material_relationship_type and material_identifier:
+                if type_value and object_type:
                     grouping_key = (
                         type_value,
                         object_type,

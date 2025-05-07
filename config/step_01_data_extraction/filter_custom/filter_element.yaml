@@ -1,33 +1,6 @@
-# === High-level settings ===
-_settings:
-  remove_empty_values: true
-  preserve_root_keys: # Some root keys should be preserved, as some prompt variables explicitly mention these (avoid confusion)
-    - Element Metadata
-    - Element Material Data
-    - Element Geometry Data
-    - Element Property Sets
-  empty_value_definitions:
-    - []
-    - {}
-    - "Not defined"
-    - "Unknown"
-    - null
-
-# Specify the order of the high level keys (as listed below)
-# The names should not be altered, only the order
-# This might have an impact on the LLM performance
-_top_level_order:
-  - Element Metadata
-  - Element Material Data
-  - Element Geometry Data
-  - Element Property Sets
-  - Element Relationships
-  - Element Location
-  - CompilationGroupID
-
-
 # Mirrored building element datasheet structure
 # Build a custom configuration with this
+
 # === Metadata ===
 Element Metadata:
   Name: true

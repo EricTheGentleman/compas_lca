@@ -1,8 +1,6 @@
-import csv
 import os
 import json
 import concurrent.futures
-import time
 from . import helpers_units as unit
 from . import helpers_io as inout
 from . import helpers_metadata as meta
@@ -11,18 +9,16 @@ from . import helpers_geometry as geo
 from . import helpers_psets as prop
 from . import helpers_relationships as rela
 from . import helpers_location as loc
-from . import helpers_boq as boq
 from . import helpers_file_metadata as file_meta
 
 
-def extractor(input_file, model, out_directory_elements, out_directory_compositions, out_directory_boq, max_objects, config):
+def extractor(brep_toggle, brep_timeout, input_file, model, out_directory_elements, out_directory_compositions, out_directory_boq, max_elements, config):
 
     # Initialize counters for single and composition elements & bill of quantities rows
     count_single_elements = 0
     count_composition_elements = 0
     count_skipped_elements = 0
-    boq_rows = []
-    brep_toggle = False
+    brep_timeouts = []
 
     # Check IFC schema version to specify the correct entity type
     schema_version = model.schema_name
@@ -52,7 +48,7 @@ def extractor(input_file, model, out_directory_elements, out_directory_compositi
 
     # Iterate over all IfcBuildingElements
     for element in elements:
-        if max_objects is not None and (count_single_elements + count_composition_elements) >= max_objects:
+        if max_elements is not None and (count_single_elements + count_composition_elements) >= max_elements:
             break
 
         # Get entity and skip based on config/1_extraction_config.yaml
@@ -68,9 +64,6 @@ def extractor(input_file, model, out_directory_elements, out_directory_compositi
 
             # Initialize the data dictionary for each element
             element_data = {}
-            obb = None # safety line
-            obb_dimensions = None
-            obb_volume = None
 
             # --- ELEMENT METADATA ---
             metadata = {}
@@ -92,16 +85,21 @@ def extractor(input_file, model, out_directory_elements, out_directory_compositi
             # --- GEOMETRY DATA ---
             geometry_data = {}
             geometry_data["Quantities (IFC)"] = geo.quantities_ifc(element, property_relationships, lc_factor)
-            obb_dimensions = None
+            geometry_data["Geometric Representation"] = geo.representation(element)
+
+            # Calculate BREP-related geometry data with boolean and timout specifications
             if brep_toggle:
                 with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                    future = executor.submit(geo.compute_brep_geometry, element, lc_factor, property_relationships)
+                    future = executor.submit(geo.compute_brep_geometry_data, element, lc_factor)
                     try:
-                        brep_result, obb_dimensions = future.result(timeout=30)
+                        brep_result, obb_dimensions = future.result(brep_timeout)
                         geometry_data.update(brep_result)
                     except concurrent.futures.TimeoutError:
-                        print(f"[TIMEOUT] Skipping BREP geometry for element {meta.globalid(element)}")
-                        brep_toggle = False  # Optional: disable for rest of the file
+                        print(f"[TIMEOUT] Skipping BREP geometry for element {meta.name(element)}")
+                        brep_timeouts.append({
+                            "Name": meta.name(element),
+                            "GlobalId": meta.globalid(element)
+                        })
             element_data["Element Geometry Data"] = geometry_data
 
             # --- PROPERTY SETS ---
@@ -138,50 +136,20 @@ def extractor(input_file, model, out_directory_elements, out_directory_compositi
                 inout.save_individual_json(element_data, out_directory_elements, element_name)
                 count_single_elements += 1
 
-                # === APPEND EACH ELEMENT TO A BILL OF QUANTITIES ===      
-
-                # Extract relevant value/data (if available) for the Bill of Quantities
-                ifc_quants_element = element_data.get("Element Geometry Data", {}).get("Quantities (IFC)", {})
-                psets_element = element_data.get("Element Property Sets", {}).get("Psets Element", {})
-                entity = meta.entity(element)
-
-                # Calculate prioritized quantities
-                volume, area, length, volume_source, area_source, length_source = boq.extract_quantities(element, entity, ifc_quants_element, psets_element, obb_dimensions, brep_toggle)
-
-                boq_row = {
-                    "GlobalId": element_data.get("Element Metadata", {}).get("GlobalId", "Unknown"),
-                    "Name": element_data.get("Element Metadata", {}).get("Name", "Unknown"),
-                    "Length [m]": length or 0,
-                    "Length Source": length_source,
-                    "Largest Surface Area [m^2]": area or 0,
-                    "Area Source": area_source,
-                    "Volume [m^3]": volume or 0,
-                    "Volume Source": volume_source
-                }
-
-                boq_rows.append(boq_row)
         except Exception as e:
             name = meta.name(element) or "Unnamed"
             globalid = meta.globalid(element) or "No GlobalId"
             print(f"Error processing element: Name='{name}', GlobalId='{globalid}'")
             print(f"Exception: {e}")
             continue
-
-    # Export the Bill of Quantities to a CSV file
-    boq_output_path = os.path.join(out_directory_boq, "BoQ_step_01a.csv")
-    boq_fieldnames = ["GlobalId", "Name", "Length [m]", "Length Source", "Largest Surface Area [m^2]", "Area Source", "Volume [m^3]", "Volume Source"]
-
-    with open(boq_output_path, "w", newline='', encoding="utf-8") as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=boq_fieldnames)
-        writer.writeheader()
-        writer.writerows(boq_rows)
     
     # Add composition and skipped element counters to metadata
     file_metadata["Module 01: Data Extraction"] = {
         "Module 01a: Extract All Elements": {
             "Building Elements with Childern (Disregarded for inference)": count_composition_elements,
             "Building Elements without Childern": count_single_elements,
-            "Skipped Elements due to Configuration": count_skipped_elements
+            "Skipped Elements due to Configuration": count_skipped_elements,
+            "BREP Timeouts": brep_timeouts
         }
     }
 
